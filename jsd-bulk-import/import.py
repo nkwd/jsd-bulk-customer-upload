@@ -1,48 +1,35 @@
-"""
-usage: bulk_customer_import.py [-h] [-l LOGLEVEL]
-                               base_url auth_user auth_pass filename
-                               servicedesk_id
-
-positional arguments:
-  base_url              The url of the hosted instance of JIRA https://yourdomain.atlassian.net
-  auth_user             Username for basic http authentication (Account needs to be jira admin)
-  auth_pass             Password for basic http authentication
-  filename              The filepath to the CSV. CSV is assumed to have a header row. Columns ordered Organisation, Full Name, Email Address
-  servicedesk_id        The id of the service desk e.g https://<base_url>/servicedesk/customer/portal/2  <-- the '2' is the ID
-
-optional arguments:
-  -h, --help            show this help message and exit
-  -l LOGLEVEL, --loglevel LOGLEVEL
-                        Set log level (DEBUG,INFO,WARNING,ERROR,CRITICAL)
-
-example:
-  python bulk_customer_import.py "https://mycustomer.atlassian.net" "local-admin" "P4ssw0rd" customers.csv 2 -l debug
-
-CSV Format: (CSV is assumed to have a header row)
-  Organisation Name, Customer Full Name, Customer Email
-  Apple, Steve Jobs, steve.jobs@apple.com
-  Microsoft, Bill Gates, bill.gates@microsoft.com
-"""
-
 import requests
 import json
 import logging
 import argparse
 import csv
 import sys
-# from urlparse import urlsplit
 
 parser = argparse.ArgumentParser()
-parser.add_argument("base_url", help="The url of the hosted instance of JIRA")
-parser.add_argument("auth_user", help="Username for basic http authentication")
-parser.add_argument("auth_pass", help="Password for basic http authentication")
-parser.add_argument("filename", help="The name of the csv for bulk upload")
-parser.add_argument("servicedesk_id", help="The id of the service desk")
-parser.add_argument("-l", "--loglevel", type=str.upper, default="INFO",
-                    choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], help="Set log level")
+parser.add_argument(
+    "base_url",
+    help="The url of the hosted instance of JIRA")
+parser.add_argument(
+    "auth_user",
+    help="Username for basic http authentication")
+parser.add_argument(
+    "auth_pass",
+    help="Password for basic http authentication")
+parser.add_argument(
+    "filename",
+    help="The name of the csv for bulk upload")
+parser.add_argument(
+    "servicedesk_id",
+    help="The id of the service desk")
+parser.add_argument(
+    "-l", "--loglevel", type=str.upper, default="INFO",
+    choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+    help="Set log level")
 args = parser.parse_args()
 
-logging.basicConfig(level=args.loglevel, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=args.loglevel,
+    format='%(asctime)s - %(levelname)s - %(message)s')
 
 jira_session = None
 api_url = args.base_url + "/rest/servicedeskapi"
@@ -76,7 +63,8 @@ def get_session(base_url, auth_user, auth_pass):
     if response.ok:
         return session
 
-    logging.error("Session initialization falied with status {} ({}).".format(response.status_code, response.reason))
+    logging.error("Session initialization falied with status {} ({}).".format(
+        response.status_code, response.reason))
     sys.exit()
 
 
@@ -87,7 +75,7 @@ def get_paginated_resource(url, content_key, headers=None, params=None):
     if params is None:
         params = {}
 
-    results, last_page, start, step = [], False, 0, 0
+    results, last_page, start = [], False, 0
 
     while not last_page:
         params["start"] = start
@@ -103,8 +91,10 @@ def get_paginated_resource(url, content_key, headers=None, params=None):
 
 def get_organizations():
     headers = {"X-ExperimentalApi": "true"}
-    organizations_list = get_paginated_resource(api_url + "/organization", "values", headers)
-    return {organization["name"]: organization for organization in organizations_list}
+    organizations_list = get_paginated_resource(
+        api_url + "/organization", "values", headers)
+    return {
+        organization["name"]: organization for organization in organizations_list}  # noqa
 
 
 def add_customer_to_organization(organization, customer):
@@ -129,7 +119,8 @@ def add_organization_to_servicedesk(servicedesk_id, organization):
     response = jira_session.post(url, headers=headers, data=json.dumps(fields))
 
     if response.ok:
-        logging.info("{} was added to service desk {}".format(organization["name"], servicedesk_id))
+        logging.info("{} was added to service desk {}".format(
+            organization["name"], servicedesk_id))
 
     return False
 
@@ -144,24 +135,32 @@ def add_customer_to_servicedesk(servicedesk_id, customer):
     response = jira_session.post(url, headers=headers, data=json.dumps(fields))
 
     if response.ok and response.status_code != 204:
-        logging.info("{} was added to service desk {}".format(customer["displayName"], servicedesk_id))
+        logging.info("{} was added to service desk {}".format(
+            customer["displayName"], servicedesk_id))
 
     return False
 
 
 def create_customer(customer):
+
     headers = {
         "X-ExperimentalApi": "true",
-        "Content-Type": "application/json"
-    }
-    payload = {"email": customer["emailAddress"], "fullName": customer["fullName"]}
+        "Content-Type": "application/json"}
+    payload = {
+        "email": customer["emailAddress"],
+        "fullName": customer["fullName"]}
     url = api_url + "/customer"
-    response = jira_session.post(url, headers=headers, data=json.dumps(payload))
+
+    response = jira_session.post(
+        url,
+        headers=headers,
+        data=json.dumps(payload))
 
     if response.ok:
-        logging.info("{} was successfully created".format(customer["emailAddress"]))
+        logging.info("{} was successfully created".format(
+            customer["emailAddress"]))
         return json.loads(response.text)
-    
+
     return False
 
 
@@ -172,7 +171,8 @@ def create_organization(name):
     }
     payload = {"name": name}
     url = api_url + "/organization"
-    response = jira_session.post(url, headers=headers, data=json.dumps(payload))
+    response = jira_session.post(
+        url, headers=headers, data=json.dumps(payload))
 
     if response.ok:
         logging.info("{} was successfully created".format(name))
@@ -191,10 +191,15 @@ def main():
     # For each row in the CSV (skip header)
     for row in rows[1:]:
         try:
-            organization_name, customer_name, customer_email = row[0], row[1], row[2]
+            organization_name = row[0]
+            customer_name = row[1]
+            customer_email = row[2]
 
             # Create the customer if they do not already exist
-            new_customer = {"fullName":  customer_name, "emailAddress": customer_email}
+            new_customer = {
+                "fullName":  customer_name,
+                "emailAddress": customer_email
+            }
             existing_customer = create_customer(new_customer)
             customer = existing_customer if existing_customer else new_customer
 
@@ -203,14 +208,16 @@ def main():
                 organization = organizations[organization_name]
             else:
                 organization = create_organization(organization_name)
-                add_organization_to_servicedesk(args.servicedesk_id, organization)
+                add_organization_to_servicedesk(
+                    args.servicedesk_id,
+                    organization)
 
             # Move the customer into the organization
             add_customer_to_organization(organization, customer)
 
             # Add the customer into the service desk
             add_customer_to_servicedesk(args.servicedesk_id, customer)
-        except:
+        except:  # noqa
             logging.exception("Failed to process row: {}".format(row))
             rows_not_processed.append(row)
 
