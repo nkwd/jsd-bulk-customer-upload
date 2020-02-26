@@ -1,23 +1,19 @@
 """
 usage: bulk_customer_import.py [-h] [-l LOGLEVEL]
-                               base_url auth_user auth_pass filename
-                               servicedesk_id
-
+                              base_url auth_user auth_api filename
+                              servicedesk_id
 positional arguments:
   base_url              The url of the hosted instance of JIRA https://yourdomain.atlassian.net
   auth_user             Username for basic http authentication (Account needs to be jira admin)
-  auth_pass             Password for basic http authentication
+  auth_api              API for basic http authentication
   filename              The filepath to the CSV. CSV is assumed to have a header row. Columns ordered Organisation, Full Name, Email Address
   servicedesk_id        The id of the service desk e.g https://<base_url>/servicedesk/customer/portal/2  <-- the '2' is the ID
-
 optional arguments:
   -h, --help            show this help message and exit
   -l LOGLEVEL, --loglevel LOGLEVEL
                         Set log level (DEBUG,INFO,WARNING,ERROR,CRITICAL)
-
 example:
-  python bulk_customer_import.py "https://mycustomer.atlassian.net" "local-admin" "P4ssw0rd" customers.csv 2 -l debug
-
+  python bulk_customer_import.py "https://mycustomer.atlassian.net" "local-admin" "API" customers.csv 2 -l debug
 CSV Format: (CSV is assumed to have a header row)
   Organisation Name, Customer Full Name, Customer Email
   Apple, Steve Jobs, steve.jobs@apple.com
@@ -30,31 +26,31 @@ import logging
 import argparse
 import csv
 import sys
+import base64
 # from urlparse import urlsplit
 
 parser = argparse.ArgumentParser()
 parser.add_argument("base_url", help="The url of the hosted instance of JIRA")
 parser.add_argument("auth_user", help="Username for basic http authentication")
-parser.add_argument("auth_pass", help="Password for basic http authentication")
+parser.add_argument("auth_api", help="API for basic http authentication")
 parser.add_argument("filename", help="The name of the csv for bulk upload")
 parser.add_argument("servicedesk_id", help="The id of the service desk")
 parser.add_argument("-l", "--loglevel", type=str.upper, default="INFO",
                     choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], help="Set log level")
 args = parser.parse_args()
 
-logging.basicConfig(level=args.loglevel, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=args.loglevel,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 jira_session = None
 api_url = args.base_url + "/rest/servicedeskapi"
 
 rows_not_processed = []
 
-
 def init():
     # init session
     global jira_session
-    jira_session = get_session(args.base_url, args.auth_user, args.auth_pass)
-
+    jira_session = get_session(args.base_url, args.auth_user, args.auth_api)
 
 def parse_csv(filename):
     output = []
@@ -65,18 +61,26 @@ def parse_csv(filename):
     return output
 
 
-def get_session(base_url, auth_user, auth_pass):
+def get_session(base_url, auth_user, auth_api):
     # init session
     logging.info("Initializing session")
     session = requests.Session()
-    session.auth = (auth_user, auth_pass)
-    url = base_url + "/rest/auth/1/session"
-    response = session.get(url)
+    session.auth = (auth_user, auth_api)
+    user_pass_concat = f"{auth_user}:{auth_api}"
+    user_pass_concat_bytes = user_pass_concat.encode()
+    user_pass_concat_base64 = base64.b64encode(user_pass_concat_bytes)
+    user_pass_concat_base64_str = user_pass_concat_base64.decode("UTF-8")
+    headers = {}
+    headers["Content-Type"] = "application/json"
+    headers["Authorization"] = f"Basic {user_pass_concat_base64_str}"
+    url = base_url + "/rest/servicedeskapi/info"
+    response = session.get(url, headers=headers)
 
     if response.ok:
         return session
 
-    logging.error("Session initialization falied with status {} ({}).".format(response.status_code, response.reason))
+    logging.error("Session initialization falied with status {} ({}).".format(
+        response.status_code, response.reason))
     sys.exit()
 
 
@@ -102,17 +106,23 @@ def get_paginated_resource(url, content_key, headers=None, params=None):
 
 
 def get_organizations():
-    headers = {"X-ExperimentalApi": "true"}
-    organizations_list = get_paginated_resource(api_url + "/organization", "values", headers)
+    headers = {
+        "X-ExperimentalApi": "true",
+        "Content-Type": "application/json",
+        "Authorization": "Basic {user_pass_concat_base64_str}"
+    }
+    organizations_list = get_paginated_resource(
+        api_url + "/organization", "values", headers)
     return {organization["name"]: organization for organization in organizations_list}
 
 
 def add_customer_to_organization(organization, customer):
     headers = {
         "X-ExperimentalApi": "true",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Authorization": "Basic {user_pass_concat_base64_str}"
     }
-    fields = {"usernames": [customer["emailAddress"]]}
+    fields = {"accountIds": [customer["accountId"]]}
     url = api_url + "/organization/{}/user".format(organization["id"])
     response = jira_session.post(url, headers=headers, data=json.dumps(fields))
 
@@ -122,14 +132,16 @@ def add_customer_to_organization(organization, customer):
 def add_organization_to_servicedesk(servicedesk_id, organization):
     headers = {
         "X-ExperimentalApi": "true",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Authorization": "Basic {user_pass_concat_base64_str}"
     }
     fields = {"organizationId":  organization["id"]}
     url = api_url + "/servicedesk/{}/organization".format(servicedesk_id)
     response = jira_session.post(url, headers=headers, data=json.dumps(fields))
 
     if response.ok:
-        logging.info("{} was added to service desk {}".format(organization["name"], servicedesk_id))
+        logging.info("{} was added to service desk {}".format(
+            organization["name"], servicedesk_id))
 
     return False
 
@@ -137,14 +149,16 @@ def add_organization_to_servicedesk(servicedesk_id, organization):
 def add_customer_to_servicedesk(servicedesk_id, customer):
     headers = {
         "X-ExperimentalApi": "true",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Authorization": "Basic {user_pass_concat_base64_str}"
     }
-    fields = {"usernames":  [customer["emailAddress"]]}
+    fields = {"accountIds":  [customer["accountId"]]}
     url = api_url + "/servicedesk/{}/customer".format(servicedesk_id)
     response = jira_session.post(url, headers=headers, data=json.dumps(fields))
 
     if response.ok and response.status_code != 204:
-        logging.info("{} was added to service desk {}".format(customer["displayName"], servicedesk_id))
+        logging.info("{} was added to service desk {}".format(
+            customer["displayName"], servicedesk_id))
 
     return False
 
@@ -152,27 +166,33 @@ def add_customer_to_servicedesk(servicedesk_id, customer):
 def create_customer(customer):
     headers = {
         "X-ExperimentalApi": "true",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Authorization": "Basic {user_pass_concat_base64_str}"
     }
-    payload = {"email": customer["emailAddress"], "fullName": customer["fullName"]}
+    payload = {"email": customer["emailAddress"],
+              "displayName": customer["displayName"]}
     url = api_url + "/customer"
-    response = jira_session.post(url, headers=headers, data=json.dumps(payload))
+    response = jira_session.post(
+        url, headers=headers, data=json.dumps(payload))
 
     if response.ok:
-        logging.info("{} was successfully created".format(customer["emailAddress"]))
+        logging.info("{} was successfully created".format(
+            customer["emailAddress"]))
         return json.loads(response.text)
-    
+
     return False
 
 
 def create_organization(name):
     headers = {
         "X-ExperimentalApi": "true",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Authorization": "Basic {user_pass_concat_base64_str}"
     }
     payload = {"name": name}
     url = api_url + "/organization"
-    response = jira_session.post(url, headers=headers, data=json.dumps(payload))
+    response = jira_session.post(
+        url, headers=headers, data=json.dumps(payload))
 
     if response.ok:
         logging.info("{} was successfully created".format(name))
@@ -194,7 +214,8 @@ def main():
             organization_name, customer_name, customer_email = row[0], row[1], row[2]
 
             # Create the customer if they do not already exist
-            new_customer = {"fullName":  customer_name, "emailAddress": customer_email}
+            new_customer = {"displayName":  customer_name,
+                            "emailAddress": customer_email}
             existing_customer = create_customer(new_customer)
             customer = existing_customer if existing_customer else new_customer
 
@@ -203,7 +224,8 @@ def main():
                 organization = organizations[organization_name]
             else:
                 organization = create_organization(organization_name)
-                add_organization_to_servicedesk(args.servicedesk_id, organization)
+                add_organization_to_servicedesk(
+                    args.servicedesk_id, organization)
 
             # Move the customer into the organization
             add_customer_to_organization(organization, customer)
@@ -218,7 +240,6 @@ def main():
 
     for row in rows_not_processed:
         print(row)
-
 
 if __name__ == "__main__":
     init()
